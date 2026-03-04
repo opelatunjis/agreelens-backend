@@ -1,5 +1,6 @@
 import os
 import io
+import json
 from dotenv import load_dotenv
 from openai import OpenAI
 from fastapi import FastAPI, File, UploadFile, Form
@@ -10,11 +11,12 @@ import docx
 # Load environment variables
 load_dotenv()
 
+# Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = FastAPI()
 
-# Allow frontend connection
+# Allow frontend connections
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,6 +24,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# -------- TEXT EXTRACTION FUNCTIONS -------- #
 
 def extract_text_from_pdf(file_bytes):
     text = ""
@@ -32,10 +37,13 @@ def extract_text_from_pdf(file_bytes):
                 text += extracted + "\n"
     return text
 
+
 def extract_text_from_docx(file_bytes):
     document = docx.Document(io.BytesIO(file_bytes))
     return "\n".join([para.text for para in document.paragraphs])
 
+
+# -------- MAIN ANALYSIS ENDPOINT -------- #
 
 @app.post("/analyze")
 async def analyze_document(
@@ -56,19 +64,20 @@ async def analyze_document(
     if not text.strip():
         return {"error": "No readable text found in document."}
 
+    # Safety limit
     text = text[:12000]
 
     SYSTEM_PROMPT = f"""
 You are AgreeLens.
 
-You are an educational clarity assistant.
+You are an educational document clarity assistant.
 You are NOT a lawyer and must NOT provide legal advice.
 
 Context:
 Document Type: {document_type}
 User Role: {user_role}
 
-Return ONLY valid JSON:
+Return ONLY valid JSON in this structure:
 
 {{
   "key_highlights": [],
@@ -90,10 +99,12 @@ Set escalation_recommended = true ONLY if:
 - Litigation or legal threat language
 - Complex regulatory exposure
 
-Be factual.
-Be concise.
-No exaggeration.
-No legal advice.
+Rules:
+- Be factual.
+- Be concise.
+- No exaggeration.
+- No legal advice.
+- Populate all fields (empty list if none).
 """
 
     response = client.chat.completions.create(
@@ -105,4 +116,13 @@ No legal advice.
         temperature=0.2
     )
 
-    return response.choices[0].message.content
+    analysis_text = response.choices[0].message.content
+
+    # Ensure valid JSON response
+    try:
+        return json.loads(analysis_text)
+    except Exception:
+        return {
+            "error": "Model did not return valid JSON",
+            "raw_response": analysis_text
+        }

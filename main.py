@@ -1,21 +1,20 @@
 import os
+import io
 from dotenv import load_dotenv
 from openai import OpenAI
+from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
+import pdfplumber
+import docx
 
+# Load environment variables
 load_dotenv()
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-from fastapi import FastAPI, File, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-import pdfplumber
-import docx
-import io
-from openai import OpenAI
-
 app = FastAPI()
 
-# Allow frontend to connect later (important)
+# Allow frontend connection
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,11 +22,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 🔐 Replace this with your real OpenAI API key
-import os
-from openai import OpenAI
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def extract_text_from_pdf(file_bytes):
     text = ""
@@ -42,8 +36,13 @@ def extract_text_from_docx(file_bytes):
     document = docx.Document(io.BytesIO(file_bytes))
     return "\n".join([para.text for para in document.paragraphs])
 
+
 @app.post("/analyze")
-async def analyze_document(file: UploadFile = File(...)):
+async def analyze_document(
+    file: UploadFile = File(...),
+    document_type: str = Form(None),
+    user_role: str = Form(None)
+):
     contents = await file.read()
 
     # Detect file type
@@ -57,21 +56,53 @@ async def analyze_document(file: UploadFile = File(...)):
     if not text.strip():
         return {"error": "No readable text found in document."}
 
-    # Limit size for safety
     text = text[:12000]
+
+    SYSTEM_PROMPT = f"""
+You are AgreeLens.
+
+You are an educational clarity assistant.
+You are NOT a lawyer and must NOT provide legal advice.
+
+Context:
+Document Type: {document_type}
+User Role: {user_role}
+
+Return ONLY valid JSON:
+
+{{
+  "key_highlights": [],
+  "obligations": [],
+  "risks": [],
+  "action_items": [],
+  "deadlines": [],
+  "financial_exposure": [],
+  "definitions": [],
+  "escalation_recommended": false
+}}
+
+Escalation rule:
+Set escalation_recommended = true ONLY if:
+- High financial liability
+- Personal guarantees
+- Indemnification clauses
+- Termination penalties
+- Litigation or legal threat language
+- Complex regulatory exposure
+
+Be factual.
+Be concise.
+No exaggeration.
+No legal advice.
+"""
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {
-                "role": "system",
-                "content": "You are AgreeLens Beta. Analyze this document clearly and return a structured summary including key obligations, risks, deadlines, and important clauses."
-            },
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": text}
         ],
         temperature=0.2
     )
 
-    return {
-        "analysis": response.choices[0].message.content
-    }
+    return response.choices[0].message.content

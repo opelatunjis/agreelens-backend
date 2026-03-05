@@ -1,9 +1,10 @@
 import os
 import io
 import json
+import base64
 from dotenv import load_dotenv
 from openai import OpenAI
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 import pdfplumber
 import docx
@@ -25,7 +26,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # -------- TEXT EXTRACTION FUNCTIONS -------- #
 
 def extract_text_from_pdf(file_bytes):
@@ -43,10 +43,36 @@ def extract_text_from_docx(file_bytes):
     return "\n".join([para.text for para in document.paragraphs])
 
 
-# -------- MAIN ANALYSIS ENDPOINT -------- #
+# -------- SYSTEM PROMPT -------- #
 
-from fastapi import Body
-import base64
+SYSTEM_PROMPT = """
+You are AgreeLens.
+
+You are an educational document clarity assistant.
+You are NOT a lawyer and must NOT provide legal advice.
+
+Return ONLY valid JSON in this structure:
+
+{
+  "key_highlights": [],
+  "obligations": [],
+  "risks": [],
+  "action_items": [],
+  "deadlines": [],
+  "financial_exposure": [],
+  "definitions": [],
+  "escalation_recommended": false
+}
+
+Rules:
+- Be factual.
+- Be concise.
+- No exaggeration.
+- No legal advice.
+- Populate all fields (empty list if none).
+"""
+
+# -------- MAIN ANALYSIS ENDPOINT -------- #
 
 @app.post("/analyze")
 async def analyze_document(payload: dict = Body(...)):
@@ -57,9 +83,14 @@ async def analyze_document(payload: dict = Body(...)):
     if not file_base64:
         return {"error": "No file data received."}
 
+    # Remove data URL prefix if present
+    if "," in file_base64:
+        file_base64 = file_base64.split(",")[1]
+
     try:
         file_bytes = base64.b64decode(file_base64)
-    except Exception:
+    except Exception as e:
+        print("Base64 decode error:", e)
         return {"error": "Invalid base64 file format."}
 
     # Detect file type
@@ -75,76 +106,19 @@ async def analyze_document(payload: dict = Body(...)):
 
     text = text[:8000]
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text}
-        ],
-        temperature=0.2
-    )
-
-    return response.choices[0].message.content
-
-    # Safety limit
-    text = text[:8000]
-
-    SYSTEM_PROMPT = f"""
-You are AgreeLens.
-
-You are an educational document clarity assistant.
-You are NOT a lawyer and must NOT provide legal advice.
-
-Context:
-Document Type: {document_type}
-User Role: {user_role}
-
-Return ONLY valid JSON in this structure:
-
-{{
-  "key_highlights": [],
-  "obligations": [],
-  "risks": [],
-  "action_items": [],
-  "deadlines": [],
-  "financial_exposure": [],
-  "definitions": [],
-  "escalation_recommended": false
-}}
-
-Escalation rule:
-Set escalation_recommended = true ONLY if:
-- High financial liability
-- Personal guarantees
-- Indemnification clauses
-- Termination penalties
-- Litigation or legal threat language
-- Complex regulatory exposure
-
-Rules:
-- Be factual.
-- Be concise.
-- No exaggeration.
-- No legal advice.
-- Populate all fields (empty list if none).
-"""
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text}
-        ],
-        temperature=0.2
-    )
-
-    analysis_text = response.choices[0].message.content
-
-    # Ensure valid JSON response
     try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.2
+        )
+
+        analysis_text = response.choices[0].message.content
         return json.loads(analysis_text)
-    except Exception:
-        return {
-            "error": "Model did not return valid JSON",
-            "raw_response": analysis_text
-        }
+
+    except Exception as e:
+        print("OpenAI error:", e)
+        return {"error": "AI processing failed."}

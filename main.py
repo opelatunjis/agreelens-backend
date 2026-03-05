@@ -65,7 +65,7 @@ async def analyze_document(
         return {"error": "No readable text found in document."}
 
     # Safety limit
-    text = text[:12000]
+    text = text[:8000]
 
     SYSTEM_PROMPT = f"""
 You are AgreeLens.

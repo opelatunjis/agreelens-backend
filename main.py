@@ -45,24 +45,46 @@ def extract_text_from_docx(file_bytes):
 
 # -------- MAIN ANALYSIS ENDPOINT -------- #
 
+from fastapi import Body
+import base64
+
 @app.post("/analyze")
-async def analyze_document(
-    file: UploadFile = File(...),
-    document_type: str = Form(None),
-    user_role: str = Form(None)
-):
-    contents = await file.read()
+async def analyze_document(payload: dict = Body(...)):
+
+    file_base64 = payload.get("file_base64")
+    file_name = payload.get("file_name", "")
+
+    if not file_base64:
+        return {"error": "No file data received."}
+
+    try:
+        file_bytes = base64.b64decode(file_base64)
+    except Exception:
+        return {"error": "Invalid base64 file format."}
 
     # Detect file type
-    if file.filename.lower().endswith(".pdf"):
-        text = extract_text_from_pdf(contents)
-    elif file.filename.lower().endswith(".docx"):
-        text = extract_text_from_docx(contents)
+    if file_name.lower().endswith(".pdf"):
+        text = extract_text_from_pdf(file_bytes)
+    elif file_name.lower().endswith(".docx"):
+        text = extract_text_from_docx(file_bytes)
     else:
-        return {"error": "Unsupported file type. Please upload PDF or DOCX."}
+        return {"error": "Unsupported file type."}
 
     if not text.strip():
         return {"error": "No readable text found in document."}
+
+    text = text[:8000]
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": text}
+        ],
+        temperature=0.2
+    )
+
+    return response.choices[0].message.content
 
     # Safety limit
     text = text[:8000]

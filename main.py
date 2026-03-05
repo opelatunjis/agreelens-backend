@@ -9,7 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import pdfplumber
 import docx
 
+# -----------------------------
 # Load environment variables
+# -----------------------------
 load_dotenv()
 
 # Initialize OpenAI client
@@ -26,25 +28,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------- TEXT EXTRACTION FUNCTIONS -------- #
+# -----------------------------
+# Health Check Route
+# -----------------------------
+@app.get("/")
+async def health():
+    return {"status": "AgreeLens backend running"}
 
+
+# -----------------------------
+# Text Extraction Functions
+# -----------------------------
 def extract_text_from_pdf(file_bytes):
     text = ""
-    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + "\n"
+    try:
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\n"
+    except Exception as e:
+        print("PDF extraction error:", e)
     return text
 
 
 def extract_text_from_docx(file_bytes):
-    document = docx.Document(io.BytesIO(file_bytes))
-    return "\n".join([para.text for para in document.paragraphs])
+    try:
+        document = docx.Document(io.BytesIO(file_bytes))
+        return "\n".join([para.text for para in document.paragraphs])
+    except Exception as e:
+        print("DOCX extraction error:", e)
+        return ""
 
 
-# -------- SYSTEM PROMPT -------- #
-
+# -----------------------------
+# System Prompt
+# -----------------------------
 SYSTEM_PROMPT = """
 You are AgreeLens.
 
@@ -72,8 +91,10 @@ Rules:
 - Populate all fields (empty list if none).
 """
 
-# -------- MAIN ANALYSIS ENDPOINT -------- #
 
+# -----------------------------
+# Main Analysis Endpoint
+# -----------------------------
 @app.post("/analyze")
 async def analyze_document(payload: dict = Body(...)):
 
@@ -101,9 +122,12 @@ async def analyze_document(payload: dict = Body(...)):
     else:
         return {"error": "Unsupported file type."}
 
+    print("Extracted text length:", len(text))
+
     if not text.strip():
         return {"error": "No readable text found in document."}
 
+    # Limit text size for performance
     text = text[:8000]
 
     try:
@@ -117,7 +141,16 @@ async def analyze_document(payload: dict = Body(...)):
         )
 
         analysis_text = response.choices[0].message.content
-        return json.loads(analysis_text)
+
+        # Ensure valid JSON response
+        try:
+            return json.loads(analysis_text)
+        except Exception:
+            print("Model returned invalid JSON:", analysis_text)
+            return {
+                "error": "Model did not return valid JSON",
+                "raw_response": analysis_text
+            }
 
     except Exception as e:
         print("OpenAI error:", e)

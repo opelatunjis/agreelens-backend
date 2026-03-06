@@ -177,17 +177,32 @@ async def analyze_document(payload: dict = Body(...)):
             temperature=0.2
         )
 
-        analysis_text = response.choices[0].message.content
+       analysis_text = response.choices[0].message.content
 
-        # Ensure valid JSON response
-        try:
-            return json.loads(analysis_text)
-        except Exception:
-            print("Model returned invalid JSON:", analysis_text)
-            return {
-                "error": "Model did not return valid JSON",
-                "raw_response": analysis_text
-            }
+# Ensure valid JSON response
+try:
+    result = json.loads(analysis_text)
+
+    # 🔒 Extra safety compatibility patch
+    for obligation in result.get("obligations", []):
+        description = obligation.get("description") or ""
+        obligation["text_en"] = str(description)
+
+    return result
+
+except Exception:
+    print("Model returned invalid JSON:", analysis_text)
+    return {
+        "error": "Model did not return valid JSON",
+        "raw_response": analysis_text
+    }
+
+except Exception:
+    print("Model returned invalid JSON:", analysis_text)
+    return {
+        "error": "Model did not return valid JSON",
+        "raw_response": analysis_text
+    }
 
     except Exception as e:
         print("OpenAI error:", e)
